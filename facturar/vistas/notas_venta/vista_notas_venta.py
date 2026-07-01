@@ -1,7 +1,7 @@
 """
 Código Crítico - Tercer Semestre Año 2026
 ==================================================
-PARTE 9.3: Vista de Notas de Venta con UUID
+PARTE 9.3: Vista de Notas de Venta con UUID - CORREGIDA
 ==================================================
 📌 USO: Gestión de notas de venta
 📌 CARACTERÍSTICAS:
@@ -9,6 +9,7 @@ PARTE 9.3: Vista de Notas de Venta con UUID
     - Conversión de codigo_producto a producto_id
     - Facturación desde nota
     - Bloqueo de sincronización durante facturación
+    - ✅ CORREGIDO: Muestra clientes, preventistas y productos correctamente (SQL directo)
 """
 
 import sqlite3
@@ -385,22 +386,43 @@ class VistaNotasVenta(QDialog):
     def cargar_notas_facturadas(self):
         self._cargar_notas_en_tabla(self.tab_facturadas, "FACTURADA")
 
+    # ✅ CORREGIDO: Usa SQL directo para obtener nombres
     def _cargar_notas_en_tabla(self, tab, estado):
+        """Carga notas en la tabla con nombres de cliente y preventista usando SQL directo"""
         notas = self.nota_modelo.listar_por_estado(estado)
         tabla = tab.tabla
         
         tabla.setRowCount(len(notas))
+        cur = self.db.cursor()
+        
         for fila, nota in enumerate(notas):
-            cliente = self.cliente_modelo.obtener_por_id(nota['cliente_id'])
-            preventista = self.preventista_modelo.obtener_por_id(nota['preventista_id'])
+            # ✅ OBTENER CLIENTE - SQL DIRECTO
+            cliente_nombre = "SIN CLIENTE"
+            if nota.get('cliente_id'):
+                cur.execute("SELECT razon_social FROM clientes WHERE id = ?", (nota['cliente_id'],))
+                row = cur.fetchone()
+                if row:
+                    cliente_nombre = row[0]
+                else:
+                    cliente_nombre = f"ID: {nota['cliente_id'][:8]}..."
+            
+            # ✅ OBTENER PREVENTISTA - SQL DIRECTO
+            preventista_nombre = "SIN PREVENTISTA"
+            if nota.get('preventista_id'):
+                cur.execute("SELECT nombre || ' ' || apellido FROM preventistas WHERE id = ?", (nota['preventista_id'],))
+                row = cur.fetchone()
+                if row:
+                    preventista_nombre = row[0]
+                else:
+                    preventista_nombre = f"ID: {nota['preventista_id'][:8]}..."
             
             # Guardar ID completo en UserRole
             item_id = QTableWidgetItem(nota['id'][:8] + "...")
             item_id.setData(Qt.ItemDataRole.UserRole, nota['id'])
             tabla.setItem(fila, 0, item_id)
             tabla.setItem(fila, 1, QTableWidgetItem(nota['numero_nota']))
-            tabla.setItem(fila, 2, QTableWidgetItem(cliente['razon_social'] if cliente else 'N/A'))
-            tabla.setItem(fila, 3, QTableWidgetItem(f"{preventista['nombre']} {preventista['apellido']}" if preventista else 'N/A'))
+            tabla.setItem(fila, 2, QTableWidgetItem(cliente_nombre))
+            tabla.setItem(fila, 3, QTableWidgetItem(preventista_nombre))
             tabla.setItem(fila, 4, QTableWidgetItem(nota['fecha']))
             
             item_total = QTableWidgetItem(f"${nota['total']:,.2f}")
@@ -423,7 +445,9 @@ class VistaNotasVenta(QDialog):
 
     # ==================== DETALLE DE NOTA ====================
     
+    # ✅ CORREGIDO: Usa SQL directo para obtener nombres de productos
     def cargar_detalle_nota(self, tab):
+        """Carga el detalle de la nota seleccionada con nombres de productos usando SQL directo"""
         indices = tab.tabla.selectedItems()
         if not indices:
             tab.tabla_detalle.setRowCount(0)
@@ -439,27 +463,55 @@ class VistaNotasVenta(QDialog):
         
         tabla_detalle = tab.tabla_detalle
         tabla_detalle.setRowCount(len(detalles))
+        cur = self.db.cursor()
         
         for i, det in enumerate(detalles):
             item_id = QTableWidgetItem(det['id'][:8] + "...")
             item_id.setData(Qt.ItemDataRole.UserRole, det['id'])
             tabla_detalle.setItem(i, 0, item_id)
             tabla_detalle.setItem(i, 1, QTableWidgetItem(det['codigo_producto']))
-            tabla_detalle.setItem(i, 2, QTableWidgetItem(""))  # Producto nombre se resolverá después
+            
+            # ✅ OBTENER NOMBRE DEL PRODUCTO - SQL DIRECTO
+            producto_nombre = "SIN PRODUCTO"
+            
+            # Primero intentar por producto_id
+            if det.get('producto_id'):
+                cur.execute("SELECT descripcion FROM productos WHERE id = ?", (det['producto_id'],))
+                row = cur.fetchone()
+                if row:
+                    producto_nombre = row[0]
+            
+            # Si no, buscar por código
+            if producto_nombre == "SIN PRODUCTO" and det.get('codigo_producto'):
+                cur.execute("SELECT descripcion FROM productos WHERE codigo_producto = ?", (det['codigo_producto'],))
+                row = cur.fetchone()
+                if row:
+                    producto_nombre = row[0]
+                    # Actualizar producto_id para futuras referencias
+                    if not det.get('producto_id'):
+                        try:
+                            cur.execute("SELECT id FROM productos WHERE codigo_producto = ?", (det['codigo_producto'],))
+                            prod_row = cur.fetchone()
+                            if prod_row:
+                                cur.execute("UPDATE nota_venta_detalle SET producto_id = ? WHERE id = ?", 
+                                           (prod_row[0], det['id']))
+                                self.db.commit()
+                        except:
+                            pass
+            
+            tabla_detalle.setItem(i, 2, QTableWidgetItem(producto_nombre))
+            
             item_cantidad = QTableWidgetItem(f"{det['cantidad']:.0f}")
             item_cantidad.setTextAlignment(Qt.AlignmentFlag.AlignRight)
             tabla_detalle.setItem(i, 3, item_cantidad)
+            
             item_precio = QTableWidgetItem(f"${det['precio_unitario']:,.2f}")
             item_precio.setTextAlignment(Qt.AlignmentFlag.AlignRight)
             tabla_detalle.setItem(i, 4, item_precio)
-            
-            # Intentar resolver producto
-            if det.get('producto_id'):
-                prod = self.producto_modelo.obtener_por_id(det['producto_id'])
-                if prod:
-                    tabla_detalle.setItem(i, 2, QTableWidgetItem(prod['descripcion'][:30]))
 
+    # ✅ CORREGIDO: Ver detalle con SQL directo
     def ver_detalle_nota(self, tabla, estado):
+        """Muestra el detalle completo de una nota con nombres correctos usando SQL directo"""
         indices = tabla.selectedItems()
         if not indices:
             return
@@ -474,8 +526,22 @@ class VistaNotasVenta(QDialog):
         if not nota:
             return
         
-        cliente = self.cliente_modelo.obtener_por_id(nota['cliente_id'])
-        preventista = self.preventista_modelo.obtener_por_id(nota['preventista_id'])
+        cur = self.db.cursor()
+        
+        # ✅ OBTENER CLIENTE - SQL DIRECTO
+        cliente_nombre = "SIN CLIENTE"
+        if nota.get('cliente_id'):
+            cur.execute("SELECT razon_social FROM clientes WHERE id = ?", (nota['cliente_id'],))
+            row = cur.fetchone()
+            cliente_nombre = row[0] if row else "SIN CLIENTE"
+        
+        # ✅ OBTENER PREVENTISTA - SQL DIRECTO
+        preventista_nombre = "SIN PREVENTISTA"
+        if nota.get('preventista_id'):
+            cur.execute("SELECT nombre || ' ' || apellido FROM preventistas WHERE id = ?", (nota['preventista_id'],))
+            row = cur.fetchone()
+            preventista_nombre = row[0] if row else "SIN PREVENTISTA"
+        
         detalles = self.nota_modelo.obtener_detalles(nota_id)
         
         dialog = QDialog(self)
@@ -504,9 +570,9 @@ class VistaNotasVenta(QDialog):
         datos.addWidget(QLabel(nota['numero_nota']), 0, 3)
         
         datos.addWidget(QLabel("<b>Cliente:</b>"), 1, 0)
-        datos.addWidget(QLabel(cliente['razon_social'] if cliente else 'N/A'), 1, 1)
+        datos.addWidget(QLabel(cliente_nombre), 1, 1)
         datos.addWidget(QLabel("<b>Preventista:</b>"), 1, 2)
-        datos.addWidget(QLabel(f"{preventista['nombre']} {preventista['apellido']}" if preventista else 'N/A'), 1, 3)
+        datos.addWidget(QLabel(preventista_nombre), 1, 3)
         
         datos.addWidget(QLabel("<b>Fecha:</b>"), 2, 0)
         datos.addWidget(QLabel(nota['fecha']), 2, 1)
@@ -540,12 +606,23 @@ class VistaNotasVenta(QDialog):
         tabla_detalle.setRowCount(len(detalles))
         for i, det in enumerate(detalles):
             tabla_detalle.setItem(i, 0, QTableWidgetItem(det['codigo_producto']))
-            prod_nombre = ""
+            
+            # ✅ OBTENER NOMBRE DEL PRODUCTO - SQL DIRECTO
+            producto_nombre = "SIN PRODUCTO"
             if det.get('producto_id'):
-                prod = self.producto_modelo.obtener_por_id(det['producto_id'])
-                if prod:
-                    prod_nombre = prod['descripcion']
-            tabla_detalle.setItem(i, 1, QTableWidgetItem(prod_nombre))
+                cur.execute("SELECT descripcion FROM productos WHERE id = ?", (det['producto_id'],))
+                row = cur.fetchone()
+                if row:
+                    producto_nombre = row[0]
+            
+            if producto_nombre == "SIN PRODUCTO" and det.get('codigo_producto'):
+                cur.execute("SELECT descripcion FROM productos WHERE codigo_producto = ?", (det['codigo_producto'],))
+                row = cur.fetchone()
+                if row:
+                    producto_nombre = row[0]
+            
+            tabla_detalle.setItem(i, 1, QTableWidgetItem(producto_nombre))
+            
             item_cantidad = QTableWidgetItem(f"{det['cantidad']:.0f}")
             item_cantidad.setTextAlignment(Qt.AlignmentFlag.AlignRight)
             tabla_detalle.setItem(i, 2, item_cantidad)
@@ -672,3 +749,15 @@ class VistaNotasVenta(QDialog):
             print("✅ Vista de notas actualizada desde sincronización")
         except Exception as e:
             print(f"⚠️ Error refrescando vista: {e}")
+
+
+if __name__ == "__main__":
+    import sys
+    from PyQt6.QtWidgets import QApplication
+    from db.db_manager import obtener_conexion
+    
+    app = QApplication(sys.argv)
+    db = obtener_conexion()
+    ventana = VistaNotasVenta(db=db)
+    ventana.show()
+    sys.exit(app.exec())
