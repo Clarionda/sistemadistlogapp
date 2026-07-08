@@ -18,7 +18,7 @@ Sistema completo de gestión para distribuidoras.
 
 ---
 
-## 🚀 INSTALACIÓN (3 PASOS)  Para LINUX -- EL SISTEMA ESTA OPTIMIZADO PARA LINUX
+## 🚀 INSTALACIÓN (3 PASOS)
 
 ### Paso 1: Clonar y entrar
 
